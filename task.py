@@ -9,7 +9,9 @@ from re import search
 from settings import delays
 from settings import done_list
 from settings import not_sub_lists
+from settings import priorities
 from settings import trello_conn
+from settings import tw_conn
 
 
 logger = getLogger(__name__)
@@ -34,8 +36,8 @@ class Board:
         # Build the list id lookup dictionary
         logger.debug("Building list dictionary for %s.", board_json["name"])
         self.lists = {}
-        for delay in delays.items():
-            self.lists[delay] = find_list(delay)["id"]
+        for delay, _ in delays.items():
+            self.lists[find_list(delay)["id"]] = delay
         self.lists[done_list] = find_list(done_list)
 
         # Build the board labels dictionary
@@ -49,22 +51,26 @@ class Board:
                      board_json["name"])
         self.checklists = {}
         for checklist in board_json["checklists"]:
-            self.checklists[checklist["id"]] = checklist["checkItems"]
+            self.checklists[checklist["id"]] = {}
+            self.checklists[checklist["id"]]["name"] = checklist["name"]
+            self.checklists[checklist["id"]]["items"] = checklist["checkItems"]
 
         # Parse cards
         logger.debug("Building cards dictionary for %s.", board_json["name"])
         self.cards = []
         for card_json in board_json["cards"]:
-            self.cards.append(Card(card_json, board_json["name"], self.labels,
-                                   self.board_checklists))
+            if not card_json["closed"] and card_json["idList"] in self.lists:
+                self.cards.append(Card(card_json, board_json["name"],
+                                       self.lists, self.labels,
+                                       self.checklists))
 
     def get_cards(self):
         return self.cards
 
     def get_tasks(self):
-        task_list = []
+        task_list = {}
         for card in self.cards:
-            task_list.append(card.get_tasks())
+            task_list.update(card.get_tasks())
 
         return task_list
 
@@ -77,119 +83,75 @@ class Card:
                  board_labels,
                  board_checklists):
 
+        self.card_json = card_json
+        self.board_name = board_name
+        self.board_lists = board_lists
+        self.board_checklists = board_checklists
+
         # Parse the card's description
-        desc_attr = Card._parse_description(card_json["desc"])
+        self.desc_attr = Card._parse_description(card_json["desc"])
 
-        try:
-            project = board_labels[card_json["idLabels"][0]]
-        except IndexError:
-            logger.warn("No TLP label set on card %s.", card_json["name"])
-            project = ""
+        # Get the full project name
+        self.project = Card._build_project_string(card_json, board_labels,
+                                                  self.desc_attr)
 
-        try:
-            if project != "":
-                project += "."
+        self.priority = self.desc_attr["priority"]
+        if self.priority == "":
+            self.priority = "N"
 
-            # Force an exception if desc_attr["project"] is None
-            project = "" + desc_attr["project"]
-        except TypeError:
-            logger.warn("No project tag set in description for card %s.",
-                        card_json["name"])
+        # Parse the dates
+        self.due = Card._parse_date(card_json["due"])
+        self.suspense = Card._parse_date(self.desc_attr["suspense"])
+        self.scheduled = Card._parse_date(self.desc_attr["scheduled"])
 
-        # Parse due date
-        try:
-            match = search(r"(\S+)\..+Z", card_json["due"])
-            due = datetime.strptime(match.group(1) + "+0000",
-                                    "%Y-%m-%dT%H:%M:%S%z")
-        except (AttributeError, TypeError):
-            due = None
+        # Set the dotoday flag
+        if (((self.due is not None) and (self.due.date() == date.today()))
+            or ((self.scheduled is not None)
+                and (self.scheduled.date == date.today()))
+            or ((self.suspense is not None)
+                and (self.suspense.date == date.today()))):
 
-        # Parse suspense date
-        try:
-            match = search(r"(\S+)\..+Z", desc_attr["suspense"])
-            suspense = datetime.strptime(match.group(1) + "+0000",
-                                    "%Y-%m-%dT%H:%M:%S%z")
-        except (AttributeError, TypeError):
-            suspense = None
+            self.dotoday = True
 
-        # Parse scheduled date
-        try:
-            match = search(r"(\S+)\..+Z", desc_attr["scheduled"])
-            scheduled = datetime.strptime(match.group(1) + "+0000",
-                                          "%Y-%m-%dT%H:%M:%S%z")
-        except (AttributeError, TypeError):
-            scheduled = None
-
-        if ((due.date() == date.today())
-                or (scheduled.date() == date.today())
-                or (suspense.date() == date.today())):
-            dotoday = True
         else:
-            dotoday = False
+            self.dotoday = False
 
         # Find the card's delay
-        delay = None
-        for list_name, list_id in board_lists.items():
-            if list_id == card_json["idList"]:
-                delay = list_name
-
-        assert delay is not None, "List %s for card %s is not a valid delay." \
-                                  % card_json["idList"] % card_json["name"]
-
-        # Create the task list
-        self.tasks = {}
-        for id_checklist in card_json["idChecklists"]:
-            # Add subproject name, if any.
-            item_project = project
-            if (board_checklists[id_checklist]["name"].upper()
-                    not in not_sub_lists):
-
-                if item_project != "":
-                    item_project += "."
-
-                item_project += board_checklists[id_checklist]["name"].lower()
-
-            # Add the check items in the checklist
-            for check_item in board_checklists[id_checklist]:
-                key = "tr/" + card_json["id"] + "|" + check_item["id"]
-                self.tasks[key] = Task(check_item["name"],
-                                       context=board_name,
-                                       delay=delay,
-                                       complete=(True if check_item["state"]
-                                                 == "complete" else False),
-                                       due=due,
-                                       suspense=suspense,
-                                       scheduled=scheduled,
-                                       project=item_project,
-                                       repo=desc_attr["repo"],
-                                       branch=desc_attr["branch"],
-                                       id_card=card_json["id"],
-                                       id_check_item=check_item["id"],
-                                       dotoday=dotoday,
-                                       trello=True)
+        self.delay = board_lists[card_json["idList"]]
+        assert self.delay is not None, "List %s for card %s is not a valid " \
+                                       "delay." % (card_json["idList"],
+                                                   card_json["name"])
 
         # Create the card task
-        key = "tr/" + card_json["id"] + "|"
-        self.tasks[key] = Task(card_json["name"],
-                               context=board_name,
-                               delay=delay,
-                               complete=(True if delay == done_list else False),
-                               due=due,
-                               suspense=suspense,
-                               scheduled=scheduled,
-                               project=project,
-                               repo=desc_attr["repo"],
-                               branch=desc_attr["branch"],
-                               id_card=card_json["id"],
-                               dotoday=dotoday,
-                               trello=True)
+        card_task_key = "tr/" + card_json["id"] + "|"
+        self.card_task = Task(card_json["name"],
+                              context=board_name,
+                              delay=self.delay,
+                              complete=(True if self.delay == done_list
+                                        else False),
+                              priority=self.priority,
+                              due=self.due,
+                              suspense=self.suspense,
+                              scheduled=self.scheduled,
+                              project=self.project,
+                              repo=self.desc_attr["repo"],
+                              branch=self.desc_attr["branch"],
+                              id_card=self.card_json["id"],
+                              dotoday=self.dotoday,
+                              trello=True,
+                              done_list_id=board_lists[done_list]["id"])
+
+        # Create the task list
+        self.tasks = self._build_task_list()
+        self.tasks[card_task_key] = self.card_task
 
     def get_tasks(self):
         return self.tasks
 
     @staticmethod
     def _parse_description(desc):
-        attributes = ["project", "suspense", "scheduled", "repo", "branch"]
+        attributes = ["project", "priority", "suspense", "scheduled", "repo",
+                      "branch"]
         values = {}
 
         logger.debug("Checking card for notes.")
@@ -213,12 +175,91 @@ class Card:
 
         return values
 
+    @staticmethod
+    def _build_project_string(card_json, board_labels, desc_attr):
+        try:
+            project = board_labels[card_json["idLabels"][0]]
+        except IndexError:
+            logger.warn("No TLP label set on card %s.", card_json["name"])
+            project = ""
+
+        try:
+            if project != "":
+                project += "."
+            # Force an exception if desc_attr["project"] is None
+            project += "" + desc_attr["project"]
+        except TypeError:
+            logger.warn("No project tag set in description for card %s.",
+                        card_json["name"])
+
+        return project
+
+    @staticmethod
+    def _parse_date(datestr):
+        try:
+            # First, try to parse the date string directly
+            date_val = datetime.strptime(datestr + "+0000", "%Y%m%dT%H%M%S%z")
+
+        except ValueError:
+            try:
+                # If this fails, try to regex out the Trello format and parse
+                match = search(r"(\S+)\..+Z", datestr)
+                date_val = datetime.strptime(match.group(1) + "+0000",
+                                        "%Y-%m-%dT%H:%M:%S%z")
+            except AttributeError:
+                # If this fails, give up
+                date_val = None
+
+        except TypeError:
+            # This happens if a None is passed in
+            date_val = None
+
+        return date_val
+
+    def _build_task_list(self):
+        task_list = {}
+
+        for id_checklist in self.card_json["idChecklists"]:
+            # Add subproject name, if any.
+            item_project = self.project
+            if self.board_checklists[id_checklist]["name"].upper() \
+                    not in not_sub_lists:
+
+                if item_project != "":
+                    item_project += "."
+
+                item_project += self.board_checklists[
+                    id_checklist]["name"].lower()
+
+            # Add the check items in the checklist
+            for check_item in self.board_checklists[id_checklist]["items"]:
+                key = "tr/" + self.card_json["id"] + "|" + check_item["id"]
+                task_list[key] = Task(check_item["name"],
+                                      context=self.board_name,
+                                      delay=self.delay,
+                                      complete=(True if check_item["state"]
+                                                == "complete" else False),
+                                      due=self.due,
+                                      suspense=self.suspense,
+                                      scheduled=self.scheduled,
+                                      project=item_project,
+                                      repo=self.desc_attr["repo"],
+                                      branch=self.desc_attr["branch"],
+                                      id_card=self.card_json["id"],
+                                      id_check_item=check_item["id"],
+                                      dotoday=self.dotoday,
+                                      trello=True,
+                                      card_task=self.card_task)
+
+        return task_list
+
 
 class Task:
     def __init__(self,
                  description,
                  context=None,
                  delay=None,
+                 priority="N",
                  complete=False,
                  due=None,
                  suspense=None,
@@ -231,7 +272,9 @@ class Task:
                  id_check_item=None,
                  dotoday=False,
                  greped=False,
-                 trello=False
+                 trello=False,
+                 card_task=None,
+                 done_list_id=None
                  ):
 
         # Set constructor attributes
@@ -242,6 +285,7 @@ class Task:
         self.due = due
         self.suspense = suspense
         self.scheduled = scheduled
+        self.priority = priority
         self.project = project
         self.repo = repo
         self.branch = branch
@@ -251,16 +295,151 @@ class Task:
         self.dotoday = dotoday
         self.greped = greped
         self.trello = trello
+        self.card_task = card_task
+        self.done_list_id = done_list_id
 
         # Set update flags
         self.update_trello = False
         self.update_taskwarrior = False
 
+    def add_dependency(self, task):
+        # I have no idea why this is happening, but it is.
+        if self.uuid == task.uuid:
+            return
+
+        # Check if we are adding to a card task.
+        if self.id_card is not None and self.id_check_item is None:
+            if self.uuid is None:
+                logger.debug("Card task %s has not been added to TaskWarrior.",
+                             self.description)
+                self.update_taskwarrior = True
+                self.update()
+
+                # Clear update flags so we don't update unnecessarily later
+                self.update_trello = False
+                self.update_taskwarrior = False
+
+            (_, this_task) = tw_conn.get_task(uuid=self.uuid)
+            try:
+                dependencies = this_task["depends"].split(",")
+                if task.uuid not in dependencies:
+                    dependencies.append(task.uuid)
+                    this_task["depends"] = ",".join(dependencies)
+                    tw_conn.task_update(this_task)
+                    logger.debug("Task %s added as dependency to %s.",
+                                 task.uuid, self.uuid)
+            except KeyError:
+                this_task["depends"] = task.uuid
+                tw_conn.task_update(this_task)
+                logger.debug("Task %s set as dependency to %s.",
+                             task.uuid, self.uuid)
+
     def update(self):
         if self.update_trello:
-            trello_conn.update_check_item(self.id_card, self.id_check_item,
-                                          self.complete)
+            # Update check items for non-card tasks
+            if self.id_card and self.id_check_item:
+                trello_conn.update_check_item(self.id_card, self.id_check_item,
+                                              self.complete)
 
-        # TODO: Write Taskwarrior update logic
+            # Send card tasks marked as "done" to the Done list
+            if (self.id_card is not None
+                    and self.id_check_item is None
+                    and self.complete):
+                trello_conn.move_card_to_list(self.id_card, self.done_list_id)
+
         if self.update_taskwarrior:
-            pass
+            # Attempt to retrieve the task from Taskwarrior
+            (_, task) = tw_conn.get_task(uuid=self.uuid)
+
+            if task:
+                logger.debug("Task %s (%s) found in Taskwarrior.",
+                             task["uuid"], task["description"])
+
+                # Update the description
+                task["description"] = self.description
+                logger.debug("Updated description for task %s to %s.",
+                             task["uuid"], task["description"])
+
+            else:
+                # Create the task if no UUID
+                assert ((self.description is not None)
+                        and (self.description != "")), \
+                    "Description improperly set on task instantiation."
+                task = tw_conn.task_add(self.description)
+                self.uuid = task["uuid"]
+                logger.info("Created task %s (%s) in Taskwarrior.",
+                            task["uuid"], task["description"])
+
+            # Add as dependency if there is a card task.
+            try:
+                self.card_task.add_dependency(self)
+            except AttributeError:
+                pass
+
+            # Update the context
+            assert self.context is not None, \
+                "Context improperly set on task instantiation."
+            try:
+                if self.context.lower() not in task["tags"]:
+                    task["tags"].append(self.context.lower())
+                    logger.debug("Updated context for task %s (%s) to %s.",
+                                 task["uuid"], task["description"],
+                                 self.context)
+
+            except KeyError:
+                task["tags"] = [self.context.lower()]
+                logger.debug("Set context for task %s (%s) to %s.",
+                             task["uuid"], task["description"], self.context)
+
+            task["priority"] = self.priority
+
+            # Add special tags as needed
+            if self.trello and "trello" not in task["tags"]:
+                task["tags"].append("trello")
+
+            if self.greped and "greped" not in task["tags"]:
+                task["tags"].append("greped")
+
+            if self.dotoday and "dotoday" not in task["tags"]:
+                task["tags"].append("dotoday")
+
+            # Update task delay
+            assert self.delay is not None, \
+                "Delay improperly set on task instantiation."
+            task["delay"] = delays[self.delay.upper()]
+            logger.debug("Updated context for task %s (%s) to %s.",
+                         task["uuid"], task["description"], task["delay"])
+
+            # Update due date
+            if self.due is not None:
+                task["due"] = self.due.isoformat()
+
+            # Update suspense date
+            if self.suspense is not None:
+                task["suspense"] = self.suspense.isoformat()
+
+            # Update scheduled date
+            if self.scheduled is not None:
+                task["scheduled"] = self.scheduled.isoformat()
+
+            # Update completion state
+            assert self.complete is not None, \
+                "Completion state improperly set on task instantiation."
+            task["status"] = "completed" if self.complete else "pending"
+
+            # Update the project
+            task["project"] = self.project
+
+            # Add metadata (if any)
+            if self.id_card is not None:
+                if self.id_check_item is None:
+                    task["trelloid"] = self.id_card + "|"
+                else:
+                    task["trelloid"] = self.id_card + "|" + self.id_check_item
+
+            # Push the update to Trello
+            tw_conn.task_update(task)
+
+    def get_todotxt_string(self):
+        return ("(" + priorities[self.priority] + ")" + self.description
+                + " +" + self.project + " @" + self.context)
