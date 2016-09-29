@@ -34,8 +34,8 @@ class Board:
         # Build the list id lookup dictionary
         logger.debug("Building list dictionary for %s.", board_json["name"])
         self.lists = {}
-        for delay in delays.items():
-            self.lists[delay] = find_list(delay)["id"]
+        for delay, _ in delays.items():
+            self.lists[find_list(delay)["id"]] = delay
         self.lists[done_list] = find_list(done_list)
 
         # Build the board labels dictionary
@@ -55,8 +55,10 @@ class Board:
         logger.debug("Building cards dictionary for %s.", board_json["name"])
         self.cards = []
         for card_json in board_json["cards"]:
-            self.cards.append(Card(card_json, board_json["name"], self.labels,
-                                   self.board_checklists))
+            if self.lists[card_json["idList"]] in delays:
+                self.cards.append(Card(card_json, board_json["name"],
+                                       self.lists, self.labels,
+                                       self.checklists))
 
     def get_cards(self):
         return self.cards
@@ -77,111 +79,59 @@ class Card:
                  board_labels,
                  board_checklists):
 
+        self.card_json = card_json
+        self.board_name = board_name
+        self.board_lists = board_lists
+        self.board_checklists = board_checklists
+
         # Parse the card's description
-        desc_attr = Card._parse_description(card_json["desc"])
+        self.desc_attr = Card._parse_description(card_json["desc"])
 
-        try:
-            project = board_labels[card_json["idLabels"][0]]
-        except IndexError:
-            logger.warn("No TLP label set on card %s.", card_json["name"])
-            project = ""
+        # Get the full project name
+        self.project = Card._build_project_string(card_json, board_labels,
+                                                  self.desc_attr)
 
-        try:
-            if project != "":
-                project += "."
+        # Parse the dates
+        self.due = Card._parse_date(card_json["due"])
+        self.suspense = Card._parse_date(self.desc_attr["suspense"])
+        self.scheduled = Card._parse_date(self.desc_attr["scheduled"])
 
-            # Force an exception if desc_attr["project"] is None
-            project = "" + desc_attr["project"]
-        except TypeError:
-            logger.warn("No project tag set in description for card %s.",
-                        card_json["name"])
+        # Set the dotoday flag
+        if (((self.due is not None) and (self.due.date() == date.today()))
+            or ((self.scheduled is not None)
+                and (self.scheduled.date == date.today()))
+            or ((self.suspense is not None)
+                and (self.suspense.date == date.today()))):
 
-        # Parse due date
-        try:
-            match = search(r"(\S+)\..+Z", card_json["due"])
-            due = datetime.strptime(match.group(1) + "+0000",
-                                    "%Y-%m-%dT%H:%M:%S%z")
-        except (AttributeError, TypeError):
-            due = None
+            self.dotoday = True
 
-        # Parse suspense date
-        try:
-            match = search(r"(\S+)\..+Z", desc_attr["suspense"])
-            suspense = datetime.strptime(match.group(1) + "+0000",
-                                    "%Y-%m-%dT%H:%M:%S%z")
-        except (AttributeError, TypeError):
-            suspense = None
-
-        # Parse scheduled date
-        try:
-            match = search(r"(\S+)\..+Z", desc_attr["scheduled"])
-            scheduled = datetime.strptime(match.group(1) + "+0000",
-                                          "%Y-%m-%dT%H:%M:%S%z")
-        except (AttributeError, TypeError):
-            scheduled = None
-
-        if ((due.date() == date.today())
-                or (scheduled.date() == date.today())
-                or (suspense.date() == date.today())):
-            dotoday = True
         else:
-            dotoday = False
+            self.dotoday = False
 
         # Find the card's delay
-        delay = None
-        for list_name, list_id in board_lists.items():
-            if list_id == card_json["idList"]:
-                delay = list_name
-
-        assert delay is not None, "List %s for card %s is not a valid delay." \
-                                  % card_json["idList"] % card_json["name"]
+        self.delay = board_lists[card_json["idList"]]
+        assert self.delay is not None, "List %s for card %s is not a valid " \
+                                       "delay." % (card_json["idList"],
+                                                   card_json["name"])
 
         # Create the task list
-        self.tasks = {}
-        for id_checklist in card_json["idChecklists"]:
-            # Add subproject name, if any.
-            item_project = project
-            if (board_checklists[id_checklist]["name"].upper()
-                    not in not_sub_lists):
-
-                if item_project != "":
-                    item_project += "."
-
-                item_project += board_checklists[id_checklist]["name"].lower()
-
-            # Add the check items in the checklist
-            for check_item in board_checklists[id_checklist]:
-                key = "tr/" + card_json["id"] + "|" + check_item["id"]
-                self.tasks[key] = Task(check_item["name"],
-                                       context=board_name,
-                                       delay=delay,
-                                       complete=(True if check_item["state"]
-                                                 == "complete" else False),
-                                       due=due,
-                                       suspense=suspense,
-                                       scheduled=scheduled,
-                                       project=item_project,
-                                       repo=desc_attr["repo"],
-                                       branch=desc_attr["branch"],
-                                       id_card=card_json["id"],
-                                       id_check_item=check_item["id"],
-                                       dotoday=dotoday,
-                                       trello=True)
+        self.tasks = self._build_task_list()
 
         # Create the card task
         key = "tr/" + card_json["id"] + "|"
         self.tasks[key] = Task(card_json["name"],
                                context=board_name,
-                               delay=delay,
-                               complete=(True if delay == done_list else False),
-                               due=due,
-                               suspense=suspense,
-                               scheduled=scheduled,
-                               project=project,
-                               repo=desc_attr["repo"],
-                               branch=desc_attr["branch"],
-                               id_card=card_json["id"],
-                               dotoday=dotoday,
+                               delay=self.delay,
+                               complete=(True if self.delay == done_list
+                                         else False),
+                               due=self.due,
+                               suspense=self.suspense,
+                               scheduled=self.scheduled,
+                               project=self.project,
+                               repo=self.desc_attr["repo"],
+                               branch=self.desc_attr["branch"],
+                               id_card=self.card_json["id"],
+                               dotoday=self.dotoday,
                                trello=True)
 
     def get_tasks(self):
@@ -212,6 +162,83 @@ class Card:
                 logger.debug("Attribute %s not found.", attribute)
 
         return values
+
+    @staticmethod
+    def _build_project_string(card_json, board_labels, desc_attr):
+        try:
+            project = board_labels[card_json["idLabels"][0]]
+        except IndexError:
+            logger.warn("No TLP label set on card %s.", card_json["name"])
+            project = ""
+
+        try:
+            if project != "":
+                project += "."
+            # Force an exception if desc_attr["project"] is None
+            project = "" + desc_attr["project"]
+        except TypeError:
+            logger.warn("No project tag set in description for card %s.",
+                        card_json["name"])
+
+        return project
+
+    @staticmethod
+    def _parse_date(datestr):
+        try:
+            # First, try to parse the date string directly
+            date_val = datetime.strptime(datestr + "+0000", "%Y%m%dT%H%M%S%z")
+
+        except ValueError:
+            try:
+                # If this fails, try to regex out the Trello format and parse
+                match = search(r"(\S+)\..+Z", datestr)
+                date_val = datetime.strptime(match.group(1) + "+0000",
+                                        "%Y-%m-%dT%H:%M:%S%z")
+            except AttributeError:
+                # If this fails, give up
+                date_val = None
+
+        except TypeError:
+            # This happens if a None is passed in
+            date_val = None
+
+        return date_val
+
+    def _build_task_list(self):
+        task_list = {}
+
+        for id_checklist in self.card_json["idChecklists"]:
+            # Add subproject name, if any.
+            item_project = self.project
+            if self.board_checklists[id_checklist]["name"].upper() \
+                    not in not_sub_lists:
+
+                if item_project != "":
+                    item_project += "."
+
+                item_project += self.board_checklists[
+                    id_checklist]["name"].lower()
+
+            # Add the check items in the checklist
+            for check_item in self.board_checklists[id_checklist]:
+                key = "tr/" + self.card_json["id"] + "|" + check_item["id"]
+                task_list[key] = Task(check_item["name"],
+                                      context=self.board_name,
+                                      delay=self.delay,
+                                      complete=(True if check_item["state"]
+                                                == "complete" else False),
+                                      due=self.due,
+                                      suspense=self.suspense,
+                                      scheduled=self.scheduled,
+                                      project=item_project,
+                                      repo=self.desc_attr["repo"],
+                                      branch=self.desc_attr["branch"],
+                                      id_card=self.card_json["id"],
+                                      id_check_item=check_item["id"],
+                                      dotoday=self.dotoday,
+                                      trello=True)
+
+        return task_list
 
 
 class Task:
