@@ -34,7 +34,11 @@ def build_tw_tasklist(task_dict):
     # Set UUIDs and completion state for already parsed tasks
     for _, task in task_dict.items():
         logger.debug("Looking up task %s in Task Warrior.", task.id_check_item)
-        tw_task = tw_conn.get_task(trelloid=task.id_check_item)[1]
+        if task.id_check_item is None:
+            (_, tw_task) = tw_conn.get_task(trelloid=task.id_card + "|")
+        else:
+            (_, tw_task) = tw_conn.get_task(trelloid=task.id_card + "|"
+                                                     + task.id_check_item)
 
         try:
             task.uuid = tw_task["uuid"]

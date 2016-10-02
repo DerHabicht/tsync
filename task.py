@@ -378,11 +378,11 @@ class Task:
             task["project"] = self.project
 
             # Add metadata (if any)
-            if self.id_check_item is not None:
-                task["trelloid"] = self.id_check_item
-
             if self.id_card is not None:
-                task["trellocardid"] = self.id_card
+                if self.id_check_item is None:
+                    task["trelloid"] = self.id_card + "|"
+                else:
+                    task["trelloid"] = self.id_card + "|" + self.id_check_item
 
             # Push the update to Trello
             tw_conn.task_update(task)
