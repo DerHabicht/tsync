@@ -139,7 +139,7 @@ class Card:
                               id_card=self.card_json["id"],
                               dotoday=self.dotoday,
                               trello=True,
-                              done_list_id=board_lists[done_list])
+                              done_list_id=board_lists[done_list]["id"])
 
         # Create the task list
         self.tasks = self._build_task_list()
