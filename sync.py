@@ -38,7 +38,7 @@ def build_tw_tasklist(task_dict):
             (_, tw_task) = tw_conn.get_task(trelloid=task.id_card + "|")
         else:
             (_, tw_task) = tw_conn.get_task(trelloid=task.id_card + "|"
-                                                     + task.id_check_item)
+                                            + task.id_check_item)
 
         try:
             task.uuid = tw_task["uuid"]
