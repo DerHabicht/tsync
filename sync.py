@@ -6,6 +6,7 @@ from logging import StreamHandler
 from logging import FileHandler
 from logging import DEBUG
 from re import search
+from taskw.warrior import TaskwarriorError
 
 from settings import trello_conn
 from settings import tw_conn
@@ -150,4 +151,10 @@ if __name__ == "__main__":
 
     logger.setLevel(DEBUG)
 
-    main()
+    try:
+        main()
+    except TaskwarriorError as err:
+        logger.fatal("Task Warrior Error:\n"
+                     "    Command: " + str(err.command) + "\n"
+                     "    stderr: " + str(err.stderr) + "\n"
+                     "    stdout: " + str(err.stdout) + "\n")

@@ -303,6 +303,10 @@ class Task:
         self.update_taskwarrior = False
 
     def add_dependency(self, task):
+        # I have no idea why this is happening, but it is.
+        if self.uuid == task.uuid:
+            return
+
         # Check if we are adding to a card task.
         if self.id_card is not None and self.id_check_item is None:
             if self.uuid is None:
@@ -332,12 +336,14 @@ class Task:
 
     def update(self):
         if self.update_trello:
-            trello_conn.update_check_item(self.id_card, self.id_check_item,
-                                          self.complete)
+            # Update check items for non-card tasks
+            if self.id_card and self.id_check_item:
+                trello_conn.update_check_item(self.id_card, self.id_check_item,
+                                              self.complete)
 
             # Send card tasks marked as "done" to the Done list
             if (self.id_card is not None
-                    and self.id_check_list is None
+                    and self.id_check_item is None
                     and self.complete):
                 trello_conn.move_card_to_list(self.id_card, self.done_list_id)
 
