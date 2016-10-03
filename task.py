@@ -139,7 +139,8 @@ class Card:
                               id_card=self.card_json["id"],
                               dotoday=self.dotoday,
                               trello=True,
-                              done_list_id=board_lists[done_list]["id"])
+                              done_list_id=board_lists[done_list]["id"],
+                              is_card_task=True)
 
         # Create the task list
         self.tasks = self._build_task_list()
@@ -274,7 +275,8 @@ class Task:
                  greped=False,
                  trello=False,
                  card_task=None,
-                 done_list_id=None
+                 done_list_id=None,
+                 is_card_task=False
                  ):
 
         # Set constructor attributes
@@ -297,6 +299,7 @@ class Task:
         self.trello = trello
         self.card_task = card_task
         self.done_list_id = done_list_id
+        self.is_card_task = is_card_task
 
         # Set update flags
         self.update_trello = False
@@ -308,7 +311,7 @@ class Task:
             return
 
         # Check if we are adding to a card task.
-        if self.id_card is not None and self.id_check_item is None:
+        if self.is_card_task:
             if self.uuid is None:
                 logger.debug("Card task %s has not been added to TaskWarrior.",
                              self.description)
