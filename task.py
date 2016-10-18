@@ -122,29 +122,8 @@ class Card:
                                        "delay." % (card_json["idList"],
                                                    card_json["name"])
 
-        # Create the card task
-        card_task_key = "tr/" + card_json["id"] + "|"
-        self.card_task = Task(card_json["name"],
-                              context=board_name,
-                              delay=self.delay,
-                              complete=(True if self.delay == done_list
-                                        else False),
-                              priority=self.priority,
-                              due=self.due,
-                              suspense=self.suspense,
-                              scheduled=self.scheduled,
-                              project=self.project,
-                              repo=self.desc_attr["repo"],
-                              branch=self.desc_attr["branch"],
-                              id_card=self.card_json["id"],
-                              dotoday=self.dotoday,
-                              trello=True,
-                              done_list_id=board_lists[done_list]["id"],
-                              is_card_task=True)
-
         # Create the task list
         self.tasks = self._build_task_list()
-        self.tasks[card_task_key] = self.card_task
 
     def get_tasks(self):
         return self.tasks
@@ -249,8 +228,7 @@ class Card:
                                       id_card=self.card_json["id"],
                                       id_check_item=check_item["id"],
                                       dotoday=self.dotoday,
-                                      trello=True,
-                                      card_task=self.card_task)
+                                      trello=True)
 
         return task_list
 
@@ -274,9 +252,7 @@ class Task:
                  dotoday=False,
                  greped=False,
                  trello=False,
-                 card_task=None,
-                 done_list_id=None,
-                 is_card_task=False
+                 done_list_id=None
                  ):
 
         # Set constructor attributes
@@ -297,45 +273,11 @@ class Task:
         self.dotoday = dotoday
         self.greped = greped
         self.trello = trello
-        self.card_task = card_task
         self.done_list_id = done_list_id
-        self.is_card_task = is_card_task
 
         # Set update flags
         self.update_trello = False
         self.update_taskwarrior = False
-
-    def add_dependency(self, task):
-        # I have no idea why this is happening, but it is.
-        if self.uuid == task.uuid:
-            return
-
-        # Check if we are adding to a card task.
-        if self.is_card_task:
-            if self.uuid is None:
-                logger.debug("Card task %s has not been added to TaskWarrior.",
-                             self.description)
-                self.update_taskwarrior = True
-                self.update()
-
-                # Clear update flags so we don't update unnecessarily later
-                self.update_trello = False
-                self.update_taskwarrior = False
-
-            (_, this_task) = tw_conn.get_task(uuid=self.uuid)
-            try:
-                dependencies = this_task["depends"].split(",")
-                if task.uuid not in dependencies:
-                    dependencies.append(task.uuid)
-                    this_task["depends"] = ",".join(dependencies)
-                    tw_conn.task_update(this_task)
-                    logger.debug("Task %s added as dependency to %s.",
-                                 task.uuid, self.uuid)
-            except KeyError:
-                this_task["depends"] = task.uuid
-                tw_conn.task_update(this_task)
-                logger.debug("Task %s set as dependency to %s.",
-                             task.uuid, self.uuid)
 
     def update(self):
         if self.update_trello:
@@ -343,12 +285,6 @@ class Task:
             if self.id_card and self.id_check_item:
                 trello_conn.update_check_item(self.id_card, self.id_check_item,
                                               self.complete)
-
-            # Send card tasks marked as "done" to the Done list
-            if (self.id_card is not None
-                    and self.id_check_item is None
-                    and self.complete):
-                trello_conn.move_card_to_list(self.id_card, self.done_list_id)
 
         if self.update_taskwarrior:
             # Attempt to retrieve the task from Taskwarrior
@@ -362,7 +298,6 @@ class Task:
                 task["description"] = self.description
                 logger.debug("Updated description for task %s to %s.",
                              task["uuid"], task["description"])
-
             else:
                 # Create the task if no UUID
                 assert ((self.description is not None)
@@ -372,12 +307,6 @@ class Task:
                 self.uuid = task["uuid"]
                 logger.info("Created task %s (%s) in Taskwarrior.",
                             task["uuid"], task["description"])
-
-            # Add as dependency if there is a card task.
-            try:
-                self.card_task.add_dependency(self)
-            except AttributeError:
-                pass
 
             # Update the context
             assert self.context is not None, \
@@ -410,7 +339,7 @@ class Task:
             assert self.delay is not None, \
                 "Delay improperly set on task instantiation."
             task["delay"] = delays[self.delay.upper()]
-            logger.debug("Updated context for task %s (%s) to %s.",
+            logger.debug("Updated delay for task %s (%s) to %s.",
                          task["uuid"], task["description"], task["delay"])
 
             # Update due date

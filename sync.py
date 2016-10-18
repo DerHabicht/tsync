@@ -11,6 +11,7 @@ from taskw.warrior import TaskwarriorError
 from settings import trello_conn
 from settings import tw_conn
 from settings import contexts
+from settings import done_list
 from task import Board
 from task import Task
 
@@ -28,7 +29,20 @@ def build_tr_tasklist(task_dict):
 
     for name in board_names:
         board = Board(trello_conn.get_board(name))
-        task_dict.update(board.get_tasks())
+        card_list = board.get_cards()
+        for card in card_list:
+            tasks = card.get_tasks()
+            done = True
+            for _, task in tasks.items():
+                if not task.complete:
+                    done = False
+                    break
+
+            if done:
+                trello_conn.move_card_to_list(card.card_json["id"],
+                                              card.board_lists[done_list]["id"])
+            else:
+                task_dict.update(tasks)
 
 
 def build_tw_tasklist(task_dict):
