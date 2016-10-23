@@ -76,9 +76,14 @@ def build_tw_tasklist(task_dict):
         if trelloid is None:
             description = task["description"]
             context = ""
-            for label in task["tags"]:
-                if label.upper() in contexts:
-                    context = label.lower()
+            try:
+                for label in task["tags"]:
+                    if label.upper() in contexts:
+                        context = label.lower()
+            except KeyError:
+                logger.warn("Task %s (%s) does not have any tags. Skipping.",
+                            task["uuid"], task["description"])
+                continue
             delay = task["delay"]
             due = task.get("due", "")
             suspense = task.get("suspense", "")
