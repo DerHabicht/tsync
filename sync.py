@@ -4,7 +4,6 @@ from logging import getLogger
 from logging import Formatter
 from logging import StreamHandler
 from logging import FileHandler
-from logging import DEBUG
 from re import search
 from taskw.warrior import TaskwarriorError
 
@@ -12,6 +11,7 @@ from settings import trello_conn
 from settings import tw_conn
 from settings import contexts
 from settings import done_list
+from settings import loglevel
 from task import Board
 from task import Task
 
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     fileHandler.setFormatter(formatter)
     logger.addHandler(fileHandler)
 
-    logger.setLevel(DEBUG)
+    logger.setLevel(loglevel)
 
     try:
         main()
